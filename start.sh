@@ -8,18 +8,22 @@ source .env 2>/dev/null || true
 
 echo "=== WhatsApp MCP Server ==="
 
-# 1. Daemon
-if ! node wa.js status 2>/dev/null | grep -q '"connected":true'; then
-    echo "[1/3] Démarrage du daemon WhatsApp..."
-    nohup node daemon.js >> /tmp/wa-daemon.log 2>&1 &
-    for i in $(seq 1 15); do
-        sleep 1
-        node wa.js status 2>/dev/null | grep -q '"connected":true' && break
-        echo "  attente connexion WhatsApp... ($i/15)"
-    done
-else
-    echo "[1/3] Daemon déjà actif."
-fi
+# 1. Daemon — tuer les instances existantes pour éviter les conflits
+echo "[1/3] Daemon WhatsApp..."
+node -e "
+const {execSync}=require('child_process');
+try{const out=execSync('pgrep -f \"node.*daemon.js\"',{encoding:'utf8'});
+out.trim().split('\n').filter(Boolean).forEach(p=>{try{process.kill(+p,'SIGTERM');console.log('  arrêt daemon PID',p);}catch{}});}catch{}
+" 2>/dev/null || true
+rm -f /tmp/wa-daemon.sock
+sleep 1
+nohup node daemon.js >> /tmp/wa-daemon.log 2>&1 &
+echo "  PID $!"
+for i in $(seq 1 15); do
+    sleep 1
+    node wa.js status 2>/dev/null | grep -q '"connected":true' && echo "  connecté!" && break
+    [ "$i" -eq 15 ] || echo "  attente... ($i/15)"
+done
 
 # 2. API / MCP server
 if lsof -ti:${PORT:-3000} >/dev/null 2>&1; then
