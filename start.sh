@@ -42,7 +42,7 @@ NGROK_BIN="${NGROK_BIN:-/data/data/com.termux/files/home/ngrok}"
 pkill -f "ngrok http ${PORT:-3000}" 2>/dev/null || true
 sleep 1
 
-nohup $NGROK_BIN http ${PORT:-3000} >> /tmp/wa-ngrok.log 2>&1 &
+nohup $NGROK_BIN http ${PORT:-3000} --domain=${NGROK_DOMAIN:-poem-wand-lucrative.ngrok-free.dev} --log=stdout >> /tmp/wa-ngrok.log 2>&1 &
 sleep 3
 
 # Récupère l'URL publique via l'API locale de ngrok
