@@ -36,7 +36,7 @@ fi
 
 # 3. ngrok
 echo "[3/3] Démarrage de ngrok..."
-NGROK_BIN="${NGROK_BIN:-ngrok}"
+NGROK_BIN="${NGROK_BIN:-/data/data/com.termux/files/home/ngrok}"
 
 # Tue un éventuel ngrok déjà lancé sur ce port
 pkill -f "ngrok http ${PORT:-3000}" 2>/dev/null || true
