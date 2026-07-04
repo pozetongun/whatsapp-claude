@@ -55,7 +55,11 @@ async function connect() {
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+    sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
+        if (qr) {
+            process.stdout.write('[daemon] Session WhatsApp requise — scannez ce QR code (WhatsApp → Appareils connectés → Connecter un appareil) :\n');
+            require('qrcode-terminal').generate(qr, { small: true }, (code) => process.stdout.write(code + '\n'));
+        }
         if (connection === 'open') {
             connected = true;
             process.stdout.write('[daemon] connecté\n');
