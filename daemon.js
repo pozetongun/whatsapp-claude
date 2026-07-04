@@ -1,8 +1,23 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, jidNormalizedUser, normalizeMessageContent } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
+const { generateReply } = require('./claude');
+
+const AUTO_REPLY_SELF_CHAT = true;
+const AUTO_REPLY_COOLDOWN_MS = 8000;
+const botSentIds = new Set();
+const lastBotReplyAt = new Map();
+
+function extractText(waMessage) {
+    const content = normalizeMessageContent(waMessage);
+    return content?.conversation
+        || content?.extendedTextMessage?.text
+        || content?.imageMessage?.caption
+        || '';
+}
 
 const AUTH_DIR = path.join(__dirname, 'auth_info');
 const DATA_DIR = path.join(__dirname, 'data');
@@ -11,6 +26,20 @@ const SOCKET_PATH = '/tmp/wa-daemon.sock';
 const MAX_MSG = 100;
 
 fs.mkdirSync(MSG_DIR, { recursive: true });
+
+// Verrou : une seule instance du daemon à la fois. Deux sockets Baileys sur la même
+// session WhatsApp corrompent le protocole Signal (messages vides, désync).
+const PID_FILE = '/tmp/wa-daemon.pid';
+if (fs.existsSync(PID_FILE)) {
+    const existingPid = parseInt(fs.readFileSync(PID_FILE, 'utf8'), 10);
+    try {
+        process.kill(existingPid, 0);
+        process.stdout.write(`[daemon] déjà en cours d'exécution (PID ${existingPid}), arrêt.\n`);
+        process.exit(1);
+    } catch { /* processus mort, verrou obsolète */ }
+}
+fs.writeFileSync(PID_FILE, String(process.pid));
+process.on('exit', () => { try { fs.unlinkSync(PID_FILE); } catch {} });
 
 let sock = null;
 let connected = false;
@@ -100,15 +129,18 @@ async function connect() {
         saveJSON(path.join(DATA_DIR, 'contacts.json'), contacts);
     });
 
-    sock.ev.on('messages.upsert', ({ messages, type }) => {
+    sock.ev.on('messages.upsert', async ({ messages, type }) => {
         if (type !== 'notify') return;
         for (const msg of messages) {
             const jid = msg.key.remoteJid;
             if (!jid) continue;
-            const text = msg.message?.conversation
-                || msg.message?.extendedTextMessage?.text
-                || msg.message?.imageMessage?.caption
-                || '';
+
+            if (botSentIds.has(msg.key.id)) { botSentIds.delete(msg.key.id); continue; }
+
+            const text = extractText(msg.message);
+
+            const priorHistory = getMessages(jid, MAX_MSG);
+
             saveMessage(jid, {
                 id: msg.key.id,
                 from: msg.key.fromMe ? 'me' : (msg.key.participant || jid),
@@ -116,6 +148,21 @@ async function connect() {
                 text,
                 timestamp: msg.messageTimestamp,
             });
+
+            const isSelfChat = sock.user && jid === jidNormalizedUser(sock.user.id);
+            const cooledDown = (Date.now() - (lastBotReplyAt.get(jid) || 0)) > AUTO_REPLY_COOLDOWN_MS;
+            if (AUTO_REPLY_SELF_CHAT && text && isSelfChat && cooledDown) {
+                try {
+                    const reply = await generateReply(priorHistory, text);
+                    if (reply) {
+                        const sent = await sock.sendMessage(jid, { text: reply });
+                        if (sent?.key?.id) botSentIds.add(sent.key.id);
+                        lastBotReplyAt.set(jid, Date.now());
+                    }
+                } catch (e) {
+                    process.stdout.write(`[daemon] erreur Claude: ${e.message}\n`);
+                }
+            }
         }
     });
 }
