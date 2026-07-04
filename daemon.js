@@ -4,9 +4,11 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
-const { generateReply } = require('./claude');
+const { generateReply, generateLegalReply } = require('./claude');
 
 const AUTO_REPLY_SELF_CHAT = true;
+const AUTO_REPLY_LEGAL_GROUP = true;
+const LEGAL_GROUP_JID = '120363428295698973@g.us'; // "Veille CGT"
 const AUTO_REPLY_COOLDOWN_MS = 8000;
 const botSentIds = new Set();
 const lastBotReplyAt = new Map();
@@ -149,11 +151,21 @@ async function connect() {
                 timestamp: msg.messageTimestamp,
             });
 
-            const isSelfChat = sock.user && jid === jidNormalizedUser(sock.user.id);
+            // WhatsApp peut router le chat "Vous" via le JID numéro (@s.whatsapp.net)
+            // ou via le LID (@lid, l'identifiant multi-appareils) — on vérifie les deux.
+            const selfJids = [sock.user?.id, sock.user?.lid].filter(Boolean).map(jidNormalizedUser);
+            const isSelfChat = selfJids.includes(jid);
+            const isLegalGroup = jid === LEGAL_GROUP_JID && !!msg.key.fromMe;
             const cooledDown = (Date.now() - (lastBotReplyAt.get(jid) || 0)) > AUTO_REPLY_COOLDOWN_MS;
-            if (AUTO_REPLY_SELF_CHAT && text && isSelfChat && cooledDown) {
+
+            if (text && cooledDown) {
                 try {
-                    const reply = await generateReply(priorHistory, text);
+                    let reply = null;
+                    if (AUTO_REPLY_SELF_CHAT && isSelfChat) {
+                        reply = await generateReply(priorHistory, text);
+                    } else if (AUTO_REPLY_LEGAL_GROUP && isLegalGroup) {
+                        reply = await generateLegalReply(priorHistory, text);
+                    }
                     if (reply) {
                         const sent = await sock.sendMessage(jid, { text: reply });
                         if (sent?.key?.id) botSentIds.add(sent.key.id);
